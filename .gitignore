@@ -1,0 +1,7 @@
+# Temporary test files
+test_*.js
+locales.js
+boot.js
+app.min.js
+index.html
+*.log
