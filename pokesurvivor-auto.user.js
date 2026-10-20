@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         PokéSurvivor Auto Bot & Cheat Suite
 // @namespace    https://github.com/nhoxboo/pokesurvivor-auto
-// @version      1.0.0
-// @description  Tool Auto Toàn Diện cho PokéSurvivor: Tự Né Tránh (Smart Kite), Tự Nhặt Đồ Toàn Bản Đồ (Global Magnet), Tự Nâng Cấp (Auto LevelUp), Bất Tử (God Mode), Tăng Tốc Game, Nhân Sát Thương & Xu.
+// @version      1.1.0
+// @description  Tool Auto Toàn Diện cho PokéSurvivor: Smart Kite, Global Magnet, Auto LevelUp, God Mode, Speed Hack, Chỉnh Tỉ Lệ Gacha, Gacha Miễn Phí, Nâng Cấp 0 Xu, Max Toàn Bộ Chỉ Số, Mở Khóa Full Pokédex.
 // @author       Beso & Anh Nam
 // @match        https://pokesurvivor.com/*
 // @match        https://*.pokesurvivor.com/*
@@ -65,7 +65,12 @@
         speedHack: 1.0,          // Tốc độ game (1x - 5x)
         moveSpeedMul: 1.0,       // Tốc độ chạy nhân vật
         coinMul: 1.0,            // Nhân lượng tiền rơi
-        autoAim: true            // Tự hướng mặt về phía quái gần nhất
+        autoAim: true,           // Tự hướng mặt về phía quái gần nhất
+        // --- Gacha & Nâng Cấp (v1.1.0) ---
+        freeGacha: false,        // Quay Gacha không tốn vé
+        freeUpgrades: false,     // Nâng cấp không tốn xu
+        legendaryRate: 'default',// Tỉ lệ ra 5★ Legendary: default | 25 | 50 | 100
+        shinyForce: false        // Luôn ra Shiny (100%)
     };
 
     let config = Object.assign({}, DEFAULT_CONFIG);
@@ -84,6 +89,21 @@
 
     let botMoveVector = [0, 0];
     let isUiMinimized = false;
+
+    function getEngine() {
+        return window.__PS_ENGINE__ || gameEngine;
+    }
+
+    function toast(msg) {
+        const engine = getEngine();
+        try {
+            if (engine && engine.UI && typeof engine.UI.toast === 'function') {
+                engine.UI.toast(msg, 2200);
+                return;
+            }
+        } catch (e) { }
+        console.log('[PokeSurvivor-Auto] ' + msg);
+    }
 
     // =========================================================================
     // 3. ENGINE HOOKS & CONTROLS
@@ -104,8 +124,59 @@
             console.log('[PokeSurvivor-Auto] Đã hook Input.axis thành công.');
         }
 
+        // ---- HOOK NÂNG CẤP MIỄN PHÍ (Upgrades.cost -> 0) ----
+        if (engine.Upgrades && typeof engine.Upgrades.cost === 'function') {
+            const origUpgCost = engine.Upgrades.cost;
+            engine.Upgrades.cost = function (id, lvl) {
+                if (config.freeUpgrades) return 0;
+                return origUpgCost.apply(this, arguments);
+            };
+            console.log('[PokeSurvivor-Auto] Đã hook Upgrades.cost (Nâng cấp miễn phí).');
+        }
+
+        // ---- HOOK GACHA MIỄN PHÍ (Gacha.costOf -> {t1:0, t10:0}) ----
+        if (engine.Gacha && typeof engine.Gacha.costOf === 'function') {
+            const origGachaCost = engine.Gacha.costOf;
+            engine.Gacha.costOf = function (save, count, type) {
+                if (config.freeGacha) return { t1: 0, t10: 0 };
+                return origGachaCost.apply(this, arguments);
+            };
+            console.log('[PokeSurvivor-Auto] Đã hook Gacha.costOf (Gacha miễn phí).');
+        }
+
+        // Áp dụng tỉ lệ Gacha theo cấu hình đã lưu
+        applyGachaRates(engine);
+
+        // Bật Shiny Force nếu đang bật từ lần trước
+        if (config.shinyForce && engine.Gacha && typeof engine.Gacha.debugForceShiny === 'function') {
+            try { engine.Gacha.debugForceShiny(99999); } catch (e) { }
+        }
+
         // Tự động gỡ bỏ hook Array.filter để tối ưu hiệu năng
         Array.prototype.filter = origFilter;
+    }
+
+    // ---- ĐIỀU CHỈNH TỈ LỆ GACHA (Gacha.RATES) ----
+    // RATES gốc: [[1, 45], [2, 30], [3, 17], [4, 6.5], [5, 1.5]]
+    function applyGachaRates(engine) {
+        engine = engine || getEngine();
+        if (!engine || !engine.Gacha || !Array.isArray(engine.Gacha.RATES)) return;
+        const R = engine.Gacha.RATES;
+        R.length = 0;
+        switch (config.legendaryRate) {
+            case '100':
+                R.push([5, 100]); // 100% chỉ ra Legendary
+                break;
+            case '50':
+                R.push([1, 15], [2, 12], [3, 10], [4, 8], [5, 50]);
+                break;
+            case '25':
+                R.push([1, 30], [2, 20], [3, 12], [4, 8], [5, 25]);
+                break;
+            default:
+                R.push([1, 45], [2, 30], [3, 17], [4, 6.5], [5, 1.5]); // Mặc định game
+        }
+        console.log('[PokeSurvivor-Auto] Đã áp dụng tỉ lệ Gacha:', JSON.stringify(R));
     }
 
     // =========================================================================
@@ -114,7 +185,7 @@
     function runBotTick() {
         requestAnimationFrame(runBotTick);
 
-        const engine = window.__PS_ENGINE__ || gameEngine;
+        const engine = getEngine();
         if (!engine || !engine.Game) return;
 
         const state = engine.Game.state;
@@ -276,7 +347,95 @@
     }
 
     // =========================================================================
-    // 6. GIAO DIỆN ĐIỀU KHIỂN (FLOATING DASHBOARD - WHITE & BLUE THEME)
+    // 6. CHEAT ACTIONS: GACHA & NÂNG CẤP (v1.1.0)
+    // =========================================================================
+
+    // Max toàn bộ chỉ số nâng cấp của 1 Pokémon (theo dex)
+    function maxUpgradesOf(engine, dex) {
+        const save = engine.DB && engine.DB.save;
+        if (!save || !engine.Upgrades || !Array.isArray(engine.Upgrades.LIST)) return 0;
+        const pupg = engine.DB.upgradesOf(dex);
+        if (!pupg) return 0;
+        let n = 0;
+        for (const u of engine.Upgrades.LIST) {
+            if (pupg[u.id] !== u.max) {
+                pupg[u.id] = u.max;
+                n++;
+            }
+        }
+        return n;
+    }
+
+    function commitAndRefresh(engine, msg) {
+        try {
+            engine.DB.commit(true);
+            if (engine.UI && typeof engine.UI.refreshCoins === 'function') {
+                engine.UI.refreshCoins();
+            }
+        } catch (e) { }
+        if (msg) toast(msg);
+    }
+
+    function doMaxCurrentUpgrades() {
+        const engine = getEngine();
+        if (!engine || !engine.DB || !engine.DB.save) { toast('❌ Chưa tải xong dữ liệu Save!'); return; }
+        const save = engine.DB.save;
+        const partner = save.partner || save.starter;
+        if (!partner) { toast('❌ Chưa chọn Pokémon đồng hành!'); return; }
+        const n = maxUpgradesOf(engine, partner);
+        commitAndRefresh(engine, `⚡ Đã Max ${n} chỉ số cho Pokémon đang chọn!`);
+    }
+
+    function doMaxAllUpgrades() {
+        const engine = getEngine();
+        if (!engine || !engine.DB || !engine.DB.save) { toast('❌ Chưa tải xong dữ liệu Save!'); return; }
+        const save = engine.DB.save;
+        const owned = save.owned || {};
+        const dexes = Object.keys(owned);
+        if (dexes.length === 0) { toast('❌ Bạn chưa sở hữu Pokémon nào!'); return; }
+        let total = 0;
+        for (const d of dexes) {
+            total += maxUpgradesOf(engine, d);
+        }
+        commitAndRefresh(engine, `🌐 Đã Max nâng cấp cho ${dexes.length} Pokémon (${total} chỉ số)!`);
+    }
+
+    function doAddResources() {
+        const engine = getEngine();
+        if (!engine || !engine.DB || !engine.DB.save) { toast('❌ Chưa tải xong dữ liệu Save!'); return; }
+        const save = engine.DB.save;
+        save.coins = (save.coins || 0) + 100000;
+        save.tickets = save.tickets || { t1: 0, t10: 0 };
+        save.tickets.t1 = (save.tickets.t1 || 0) + 999;
+        save.tickets.t10 = (save.tickets.t10 || 0) + 99;
+        commitAndRefresh(engine, '💰 Đã thêm 100,000 Xu + 999 Vé ×1 + 99 Vé ×10!');
+    }
+
+    function doUnlockFullDex() {
+        const engine = getEngine();
+        if (!engine || !engine.DB || !engine.DEX) { toast('❌ Chưa tải xong dữ liệu Pokédex!'); return; }
+        let c = 0, s = 0;
+        for (const mon of engine.DEX) {
+            const d = mon && mon.dex;
+            if (!d) continue;
+            try {
+                if (!engine.DB.owns || !engine.DB.owns(d)) {
+                    engine.DB.grant(d, 'auto');
+                    c++;
+                } else { c++; }
+            } catch (e) { }
+            try {
+                if (engine.Sprites && typeof engine.Sprites.hasShiny === 'function' && engine.Sprites.hasShiny(d)) {
+                    engine.DB.grantShiny(d, 'auto');
+                    s++;
+                }
+            } catch (e) { }
+        }
+        commitAndRefresh(engine, `🌟 Đã mở khóa Full Pokédex: ${c} Pokémon & ${s} Shiny!`);
+    }
+
+    // =========================================================================
+    // 7. GIAO DIỆN ĐIỀU KHIỂN (FLOATING DASHBOARD - WHITE & BLUE THEME)
     // =========================================================================
     function createUI() {
         if (document.getElementById('ps-auto-panel')) return;
@@ -451,6 +610,14 @@
                 .ps-btn.primary:hover {
                     background: #1d4ed8;
                 }
+                .ps-btn.gold {
+                    background: #f59e0b;
+                    border-color: #d97706;
+                    color: #ffffff;
+                }
+                .ps-btn.gold:hover {
+                    background: #d97706;
+                }
                 .ps-btn.danger {
                     background: #ef4444;
                     border-color: #dc2626;
@@ -481,7 +648,7 @@
             <div id="ps-header">
                 <div style="display:flex;align-items:center;">
                     <span>⚡ PokéSurvivor Auto</span>
-                    <span class="title-badge">v1.0</span>
+                    <span class="title-badge">v1.1</span>
                 </div>
                 <div class="controls">
                     <button id="ps-btn-min" title="Thu nhỏ / Mở rộng">—</button>
@@ -582,6 +749,44 @@
                     </select>
                 </div>
 
+                <div class="ps-section-title">🎰 Gacha & Nâng Cấp (Cheat Kho)</div>
+                <div class="ps-row">
+                    <span class="ps-label">🎁 Gacha Miễn Phí (0 Vé)</span>
+                    <label class="ps-switch">
+                        <input type="checkbox" id="cfg-freeGacha">
+                        <span class="ps-slider"></span>
+                    </label>
+                </div>
+                <div class="ps-row">
+                    <span class="ps-label">⭐ Tỉ Lệ 5★ Legendary</span>
+                    <select id="cfg-legendaryRate" class="ps-select">
+                        <option value="default">1.5% (Mặc định)</option>
+                        <option value="25">25% (Cao)</option>
+                        <option value="50">50% (Rất cao)</option>
+                        <option value="100">100% (Chỉ ra Legendary)</option>
+                    </select>
+                </div>
+                <div class="ps-row">
+                    <span class="ps-label" style="color:#a21caf;font-weight:600;">✨ Luôn Ra Shiny (100%)</span>
+                    <label class="ps-switch">
+                        <input type="checkbox" id="cfg-shinyForce">
+                        <span class="ps-slider"></span>
+                    </label>
+                </div>
+                <div class="ps-row">
+                    <span class="ps-label">🪙 Nâng Cấp 0 Xu (Miễn Phí)</span>
+                    <label class="ps-switch">
+                        <input type="checkbox" id="cfg-freeUpgrades">
+                        <span class="ps-slider"></span>
+                    </label>
+                </div>
+                <div class="ps-btn-group">
+                    <button class="ps-btn primary" id="btn-max-upg">⚡ Max Upg Đang Chọn</button>
+                    <button class="ps-btn primary" id="btn-max-upg-all">🌐 Max Upg Tất Cả</button>
+                    <button class="ps-btn gold" id="btn-add-res">💰 +100K Xu & Vé</button>
+                    <button class="ps-btn gold" id="btn-unlock-dex">🌟 Full Pokédex</button>
+                </div>
+
                 <div class="ps-section-title">Thao Tác Nhanh</div>
                 <div class="ps-btn-group">
                     <button class="ps-btn primary" id="btn-pull-all">🧲 Hút Toàn Bộ</button>
@@ -601,7 +806,8 @@
         // Bind switch toggles
         const binds = [
             'autoPlay', 'autoMagnet', 'autoLevelUp', 'autoBond',
-            'autoItem', 'autoRestart', 'godMode', 'oneHitKill', 'cdReduction'
+            'autoItem', 'autoRestart', 'godMode', 'oneHitKill', 'cdReduction',
+            'freeGacha', 'freeUpgrades'
         ];
         binds.forEach(key => {
             const el = document.getElementById(`cfg-${key}`);
@@ -633,30 +839,65 @@
             });
         }
 
-        // Action Buttons
+        // ---- Bind Gacha & Upgrade controls (v1.1.0) ----
+        const legendaryEl = document.getElementById('cfg-legendaryRate');
+        if (legendaryEl) {
+            legendaryEl.value = String(config.legendaryRate || 'default');
+            legendaryEl.addEventListener('change', () => {
+                config.legendaryRate = legendaryEl.value;
+                saveConfig();
+                applyGachaRates();
+                const label = legendaryEl.options[legendaryEl.selectedIndex].text;
+                toast('⭐ Đã áp dụng tỉ lệ Legendary: ' + label);
+            });
+        }
+
+        const shinyEl = document.getElementById('cfg-shinyForce');
+        if (shinyEl) {
+            shinyEl.checked = !!config.shinyForce;
+            shinyEl.addEventListener('change', () => {
+                config.shinyForce = shinyEl.checked;
+                saveConfig();
+                const engine = getEngine();
+                if (engine && engine.Gacha && typeof engine.Gacha.debugForceShiny === 'function') {
+                    try {
+                        engine.Gacha.debugForceShiny(config.shinyForce ? 99999 : 0);
+                    } catch (e) { }
+                }
+                toast(config.shinyForce ? '✨ BẬT: 100% ra Shiny!' : '✨ TẮT: Shiny về tỉ lệ gốc 1%');
+            });
+        }
+
+        // Cheat action buttons
+        document.getElementById('btn-max-upg').addEventListener('click', doMaxCurrentUpgrades);
+        document.getElementById('btn-max-upg-all').addEventListener('click', doMaxAllUpgrades);
+        document.getElementById('btn-add-res').addEventListener('click', doAddResources);
+        document.getElementById('btn-unlock-dex').addEventListener('click', doUnlockFullDex);
+
+        // Quick action buttons
         document.getElementById('btn-pull-all').addEventListener('click', () => {
-            const engine = window.__PS_ENGINE__ || gameEngine;
+            const engine = getEngine();
             if (engine && engine.Pickups && typeof engine.Pickups.pullAll === 'function') {
                 engine.Pickups.pullAll();
             }
         });
 
         document.getElementById('btn-heal').addEventListener('click', () => {
-            const engine = window.__PS_ENGINE__ || gameEngine;
+            const engine = getEngine();
             if (engine && engine.Game && engine.Game.player) {
                 engine.Game.player.hp = engine.Game.player.maxHp;
             }
         });
 
         document.getElementById('btn-level-up').addEventListener('click', () => {
-            const engine = window.__PS_ENGINE__ || gameEngine;
+            const engine = getEngine();
             if (engine && engine.Game && typeof engine.Game.debugLevelUp === 'function') {
                 engine.Game.debugLevelUp();
             }
         });
 
         document.getElementById('btn-start-run').addEventListener('click', () => {
-            const engine = window.__PS_ENGINE__ || gameEngine;
+            const engine = getEngine();
             if (engine && engine.Flow && typeof engine.Flow.play === 'function') {
                 engine.Flow.play();
             } else if (engine && engine.Game && typeof engine.Game.startRun === 'function') {
@@ -740,7 +981,7 @@
     }
 
     // =========================================================================
-    // 7. INITIALIZE SCRIPT
+    // 8. INITIALIZE SCRIPT
     // =========================================================================
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => {
